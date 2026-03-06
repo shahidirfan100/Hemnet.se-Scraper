@@ -1,0 +1,307 @@
+{
+  "actorSpecification": 1,
+  "fields": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "title": "Listing ID",
+        "description": "Unique Hemnet listing ID"
+      },
+      "slug": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "title": "Slug"
+      },
+      "url": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "title": "Listing URL"
+      },
+      "street_address": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "title": "Street Address"
+      },
+      "location_description": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "title": "Location"
+      },
+      "asking_price": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "title": "Asking Price"
+      },
+      "fee": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "title": "Fee"
+      },
+      "rooms": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "title": "Rooms"
+      },
+      "living_and_supplemental_areas": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "title": "Area"
+      },
+      "land_area": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "title": "Land Area"
+      },
+      "square_meter_price": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "title": "Square Meter Price"
+      },
+      "broker_name": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "title": "Broker Name"
+      },
+      "broker_agency_name": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "title": "Broker Agency"
+      },
+      "broker_agency_logo": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "title": "Broker Agency Logo"
+      },
+      "broker_thumbnail": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "title": "Broker Thumbnail"
+      },
+      "lat": {
+        "type": [
+          "number",
+          "null"
+        ],
+        "title": "Latitude"
+      },
+      "lon": {
+        "type": [
+          "number",
+          "null"
+        ],
+        "title": "Longitude"
+      },
+      "housing_form_symbol": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "title": "Housing Form Symbol"
+      },
+      "housing_form_name": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "title": "Housing Form"
+      },
+      "labels": {
+        "type": "array",
+        "title": "Labels"
+      },
+      "showings": {
+        "type": "array",
+        "title": "Showings"
+      },
+      "thumbnails": {
+        "type": "array",
+        "title": "Thumbnails"
+      },
+      "active_package": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "title": "Active Package"
+      },
+      "new_construction": {
+        "type": [
+          "boolean",
+          "null"
+        ],
+        "title": "New Construction"
+      },
+      "project_id": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "title": "Project ID"
+      },
+      "record_type": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "title": "Record Type"
+      },
+      "removed_before_showing": {
+        "type": [
+          "boolean",
+          "null"
+        ],
+        "title": "Removed Before Showing"
+      },
+      "saved": {
+        "type": [
+          "boolean",
+          "null"
+        ],
+        "title": "Saved"
+      },
+      "upcoming": {
+        "type": [
+          "boolean",
+          "null"
+        ],
+        "title": "Upcoming"
+      },
+      "published_at": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "title": "Published At (Raw)"
+      },
+      "published_at_iso": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "title": "Published At"
+      }
+    },
+    "required": [
+      "id",
+      "url"
+    ],
+    "additionalProperties": true
+  },
+  "views": {
+    "overview": {
+      "title": "Overview",
+      "transformation": {
+        "fields": [
+          "id",
+          "url",
+          "street_address",
+          "location_description",
+          "asking_price",
+          "fee",
+          "rooms",
+          "living_and_supplemental_areas",
+          "land_area",
+          "square_meter_price",
+          "broker_name",
+          "broker_agency_name",
+          "housing_form_name",
+          "published_at_iso"
+        ]
+      },
+      "display": {
+        "component": "table",
+        "properties": {
+          "id": {
+            "label": "Listing ID",
+            "format": "text"
+          },
+          "url": {
+            "label": "URL",
+            "format": "link"
+          },
+          "street_address": {
+            "label": "Street Address",
+            "format": "text"
+          },
+          "location_description": {
+            "label": "Location",
+            "format": "text"
+          },
+          "asking_price": {
+            "label": "Asking Price",
+            "format": "text"
+          },
+          "fee": {
+            "label": "Fee",
+            "format": "text"
+          },
+          "rooms": {
+            "label": "Rooms",
+            "format": "text"
+          },
+          "living_and_supplemental_areas": {
+            "label": "Area",
+            "format": "text"
+          },
+          "land_area": {
+            "label": "Land Area",
+            "format": "text"
+          },
+          "square_meter_price": {
+            "label": "Price per m2",
+            "format": "text"
+          },
+          "broker_name": {
+            "label": "Broker",
+            "format": "text"
+          },
+          "broker_agency_name": {
+            "label": "Agency",
+            "format": "text"
+          },
+          "housing_form_name": {
+            "label": "Housing Form",
+            "format": "text"
+          },
+          "published_at_iso": {
+            "label": "Published At",
+            "format": "text"
+          }
+        }
+      }
+    }
+  }
+}

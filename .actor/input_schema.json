@@ -1,0 +1,84 @@
+{
+  "title": "Hemnet.se Scraper",
+  "description": "Scrape property listings from Hemnet.se for-sale pages. You can use a direct Hemnet search URL or optional filters.",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "startUrl": {
+      "title": "Start URL",
+      "type": "string",
+      "description": "Hemnet for-sale URL, for example https://www.hemnet.se/till-salu",
+      "editor": "textfield",
+      "prefill": "https://www.hemnet.se/till-salu"
+    },
+    "keyword": {
+      "title": "Keyword",
+      "type": "string",
+      "description": "Optional keyword filter.",
+      "editor": "textfield",
+      "prefill": ""
+    },
+    "location": {
+      "title": "Location",
+      "type": "string",
+      "description": "Optional location slug fallback when URL has no filters.",
+      "editor": "textfield",
+      "prefill": ""
+    },
+    "sort": {
+      "title": "Sort order",
+      "type": "string",
+      "description": "Sort mode for listings.",
+      "editor": "select",
+      "default": "NEWEST",
+      "prefill": "NEWEST",
+      "enum": [
+        "NEWEST",
+        "OLDEST",
+        "LOWEST_PRICE",
+        "HIGHEST_PRICE",
+        "NEXT_OPEN_HOUSE",
+        "STREET_ADDRESS",
+        "STREET_ADDRESS_DESC",
+        "LARGEST_LIVING_AREA",
+        "SMALLEST_LIVING_AREA",
+        "LARGEST_LAND_AREA",
+        "SMALLEST_LAND_AREA",
+        "LOWEST_PRICE_PER_M2",
+        "HIGHEST_PRICE_PER_M2",
+        "LOWEST_FEE",
+        "HIGHEST_FEE",
+        "CLOSEST_TO_WATER"
+      ]
+    },
+    "results_wanted": {
+      "title": "Maximum number of listings",
+      "type": "integer",
+      "description": "Maximum listings to save.",
+      "minimum": 1,
+      "default": 20,
+      "prefill": 20,
+      "editor": "number"
+    },
+    "max_pages": {
+      "title": "Maximum number of pages",
+      "type": "integer",
+      "description": "Safety cap for paginated API requests.",
+      "minimum": 1,
+      "default": 10,
+      "prefill": 10,
+      "editor": "number"
+    },
+    "proxyConfiguration": {
+      "title": "Proxy configuration",
+      "type": "object",
+      "description": "Optional proxy setup for higher request reliability.",
+      "editor": "proxy",
+      "default": {
+        "useApifyProxy": false
+      }
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}

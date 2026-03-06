@@ -1,0 +1,11 @@
+{
+  "startUrl": "https://www.hemnet.se/till-salu",
+  "keyword": "",
+  "location": "",
+  "sort": "NEWEST",
+  "results_wanted": 20,
+  "max_pages": 10,
+  "proxyConfiguration": {
+    "useApifyProxy": false
+  }
+}

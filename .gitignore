@@ -4,3 +4,4 @@ storage
 /storage
 apify_storage
 /apify_storage
+package-lock.json

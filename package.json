@@ -21,8 +21,8 @@
   "author": "Shahid Irfan",
   "license": "ISC",
   "devDependencies": {
-    "@apify/eslint-config": "^2.0.6",
-    "eslint": "^10.5.0",
+    "@apify/eslint-config": "^2.0.0",
+    "eslint": "^9.39.0",
     "eslint-config-prettier": "^10.1.8",
     "prettier": "^3.8.4"
   }

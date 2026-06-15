@@ -7,7 +7,7 @@ WORKDIR /home/app
 USER app
 
 COPY --chown=app:app package*.json ./
-RUN npm i --omit=dev && rm -r ~/.npm || true
+RUN npm ci --omit=dev && rm -r ~/.npm || true
 
 COPY --chown=app:app . ./
 

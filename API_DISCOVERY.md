@@ -71,3 +71,6 @@
 ## Notes
 - Direct access to `/_next/data/...` endpoints was blocked with `403`.
 - The GraphQL endpoint remained accessible and provided broader listing-card coverage.
+- Hemnet can intermittently return a Cloudflare HTML challenge instead of JSON, especially from stricter datacenter environments.
+- The actor should bootstrap the public search page first, reuse cookies in a `CookieJar`, and retry GraphQL with browser-like same-origin headers before treating the run as failed.
+- When a request still fails, diagnose with `got-scraping` only: read this file first, probe the start page, then probe `https://www.hemnet.se/graphql` and log status code, content type, and a short body snippet.

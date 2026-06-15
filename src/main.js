@@ -1,10 +1,16 @@
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+
 import { Actor, log } from 'apify';
 import { Dataset } from 'crawlee';
 import { gotScraping } from 'got-scraping';
+import { CookieJar } from 'tough-cookie';
 
 const GRAPHQL_URL = 'https://www.hemnet.se/graphql';
 const DEFAULT_START_URL = 'https://www.hemnet.se/till-salu';
 const PAGE_SIZE = 50;
+const API_DISCOVERY_PATH = join(process.cwd(), 'API_DISCOVERY.md');
+const HTML_SNIPPET_LIMIT = 240;
 
 const SEARCH_QUERY = `
 query webSearchForSaleListings($searchParams: ListingSearchForSaleInput!, $sort: ListingSearchForSaleSorting, $offset: Int) {
@@ -71,6 +77,37 @@ const ALLOWED_SORTS = new Set([
     'HIGHEST_FEE',
     'CLOSEST_TO_WATER',
 ]);
+
+const GRAPHQL_HEADER_PROFILES = [
+    (selectedStartUrl) => ({
+        Accept: 'application/json, text/plain, */*',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Content-Type': 'application/json',
+        Origin: 'https://www.hemnet.se',
+        Referer: selectedStartUrl,
+        'Sec-Fetch-Dest': 'empty',
+        'Sec-Fetch-Mode': 'cors',
+        'Sec-Fetch-Site': 'same-origin',
+    }),
+    (selectedStartUrl) => ({
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        Origin: 'https://www.hemnet.se',
+        Referer: selectedStartUrl,
+    }),
+];
+
+const START_PAGE_HEADERS = {
+    Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Cache-Control': 'no-cache',
+    Pragma: 'no-cache',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'none',
+    'Sec-Fetch-User': '?1',
+    'Upgrade-Insecure-Requests': '1',
+};
 
 const toInt = (value) => {
     const parsed = Number.parseInt(String(value), 10);
@@ -193,6 +230,191 @@ const normalizeSort = (sort) => {
     return ALLOWED_SORTS.has(normalized) ? normalized : 'NEWEST';
 };
 
+const truncateText = (value, limit = HTML_SNIPPET_LIMIT) => String(value || '').replace(/\s+/g, ' ').trim().slice(0, limit);
+
+const getContentType = (headers = {}) => String(headers['content-type'] || headers['Content-Type'] || '').toLowerCase();
+
+const looksLikeHtml = (body, headers = {}) => {
+    const contentType = getContentType(headers);
+    const snippet = truncateText(body, 64).toLowerCase();
+    return contentType.includes('text/html')
+        || snippet.startsWith('<!doctype html')
+        || snippet.startsWith('<html')
+        || snippet.includes('just a moment');
+};
+
+const buildFailureMetadata = ({ name, response, error }) => ({
+    attempt: name,
+    statusCode: response?.statusCode ?? error?.response?.statusCode ?? null,
+    contentType: getContentType(response?.headers || error?.response?.headers),
+    bodySnippet: truncateText(response?.body || error?.response?.body),
+    message: error?.message,
+});
+
+let cachedApiDiscovery;
+
+const readApiDiscovery = async () => {
+    if (cachedApiDiscovery !== undefined) return cachedApiDiscovery;
+
+    try {
+        cachedApiDiscovery = await readFile(API_DISCOVERY_PATH, 'utf8');
+    } catch {
+        cachedApiDiscovery = '';
+    }
+
+    return cachedApiDiscovery;
+};
+
+const bootstrapSession = async ({ cookieJar, proxyUrl, selectedStartUrl }) => {
+    const response = await gotScraping.get(selectedStartUrl, {
+        cookieJar,
+        proxyUrl,
+        headers: START_PAGE_HEADERS,
+        throwHttpErrors: false,
+        timeout: { request: 30000 },
+        retry: { limit: 1 },
+    });
+
+    return {
+        statusCode: response.statusCode,
+        contentType: getContentType(response.headers),
+        bodySnippet: truncateText(response.body),
+        isHtml: looksLikeHtml(response.body, response.headers),
+    };
+};
+
+const parseJsonResponse = ({ response, name }) => {
+    if (looksLikeHtml(response.body, response.headers)) {
+        throw new Error(`Received HTML instead of JSON on ${name}`);
+    }
+
+    if (typeof response.body === 'object' && response.body !== null) {
+        return response.body;
+    }
+
+    try {
+        return JSON.parse(response.body);
+    } catch (error) {
+        throw new Error(`Invalid JSON on ${name}: ${error.message}`);
+    }
+};
+
+const diagnoseRequestFailure = async ({
+    cookieJar,
+    offset,
+    proxyUrl,
+    requestBody,
+    selectedStartUrl,
+}) => {
+    const apiDiscovery = await readApiDiscovery();
+    const diagnostics = [];
+
+    diagnostics.push({
+        step: 'api_discovery_reference',
+        snippet: truncateText(apiDiscovery, 320),
+    });
+
+    try {
+        const startPage = await bootstrapSession({ cookieJar, proxyUrl, selectedStartUrl });
+        diagnostics.push({
+            step: 'start_page_probe',
+            ...startPage,
+        });
+    } catch (error) {
+        diagnostics.push({
+            step: 'start_page_probe',
+            message: error.message,
+        });
+    }
+
+    try {
+        const probeResponse = await gotScraping.post(GRAPHQL_URL, {
+            cookieJar,
+            proxyUrl,
+            headers: GRAPHQL_HEADER_PROFILES[1](selectedStartUrl),
+            json: requestBody,
+            throwHttpErrors: false,
+            timeout: { request: 30000 },
+            retry: { limit: 0 },
+        });
+
+        diagnostics.push({
+            step: 'graphql_probe',
+            statusCode: probeResponse.statusCode,
+            contentType: getContentType(probeResponse.headers),
+            bodySnippet: truncateText(probeResponse.body),
+            offset,
+        });
+    } catch (error) {
+        diagnostics.push({
+            step: 'graphql_probe',
+            offset,
+            message: error.message,
+        });
+    }
+
+    log.warning('Hemnet request diagnostics', { diagnostics });
+};
+
+const fetchGraphqlPayload = async ({
+    cookieJar,
+    offset,
+    proxyUrl,
+    requestBody,
+    selectedStartUrl,
+}) => {
+    const attempts = [
+        { name: 'direct_graphql', profileIndex: 0, bootstrap: false },
+        { name: 'bootstrapped_graphql', profileIndex: 0, bootstrap: true },
+        { name: 'bootstrapped_minimal_graphql', profileIndex: 1, bootstrap: true },
+    ];
+
+    const failures = [];
+
+    for (const attempt of attempts) {
+        try {
+            if (attempt.bootstrap) {
+                const sessionInfo = await bootstrapSession({ cookieJar, proxyUrl, selectedStartUrl });
+                log.info('Bootstrapped Hemnet session', {
+                    attempt: attempt.name,
+                    ...sessionInfo,
+                });
+            }
+
+            const response = await gotScraping.post(GRAPHQL_URL, {
+                cookieJar,
+                proxyUrl,
+                headers: GRAPHQL_HEADER_PROFILES[attempt.profileIndex](selectedStartUrl),
+                json: requestBody,
+                throwHttpErrors: false,
+                timeout: { request: 30000 },
+                retry: { limit: 1 },
+            });
+
+            if (response.statusCode >= 400) {
+                failures.push(buildFailureMetadata({ name: attempt.name, response }));
+                log.warning('Hemnet GraphQL attempt failed', failures[failures.length - 1]);
+                continue;
+            }
+
+            return parseJsonResponse({ response, name: attempt.name });
+        } catch (error) {
+            failures.push(buildFailureMetadata({ name: attempt.name, error }));
+            log.warning('Hemnet GraphQL attempt failed', failures[failures.length - 1]);
+        }
+    }
+
+    await diagnoseRequestFailure({
+        cookieJar,
+        offset,
+        proxyUrl,
+        requestBody,
+        selectedStartUrl,
+    });
+
+    throw new Error(`Hemnet API request failed after ${attempts.length} attempts. Last failure: ${JSON.stringify(failures.at(-1) || {})}`);
+};
+
 const mapCard = (card) => {
     const publishedAtEpoch = Number.parseFloat(card.publishedAt || '');
     const detailUrl = card.slug ? `https://www.hemnet.se/bostad/${card.slug}` : null;
@@ -279,6 +501,7 @@ async function main() {
     let totalSaved = 0;
     let offset = 0;
     let page = 0;
+    const cookieJar = new CookieJar();
 
     while (totalSaved < resultsWanted && page < maxPages) {
         const proxyUrl = proxy ? await proxy.newUrl() : undefined;
@@ -293,29 +516,27 @@ async function main() {
             },
         };
 
-        const response = await gotScraping.post(GRAPHQL_URL, {
+        const responseBody = await fetchGraphqlPayload({
+            cookieJar,
+            offset,
             proxyUrl,
-            headers: {
-                Accept: 'application/json',
-                'Content-Type': 'application/json',
-                Origin: 'https://www.hemnet.se',
-                Referer: selectedStartUrl,
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:147.0) Gecko/20100101 Firefox/147.0',
-            },
-            json: body,
-            timeout: { request: 30000 },
-            retry: { limit: 2 },
+            requestBody: body,
+            selectedStartUrl,
         });
-
-        const responseBody = typeof response.body === 'string'
-            ? JSON.parse(response.body)
-            : response.body;
 
         const result = responseBody?.data?.searchForSaleListings;
         const errors = responseBody?.errors;
 
         if (Array.isArray(errors) && errors.length) {
             throw new Error(`GraphQL returned errors: ${JSON.stringify(errors)}`);
+        }
+
+        if (!result) {
+            log.warning('Unexpected Hemnet GraphQL shape', {
+                topLevelKeys: Object.keys(responseBody || {}),
+                dataKeys: Object.keys(responseBody?.data || {}),
+            });
+            break;
         }
 
         const cards = Array.isArray(result?.cards) ? result.cards : [];

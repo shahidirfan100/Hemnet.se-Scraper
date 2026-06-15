@@ -10,6 +10,7 @@ Extract structured property listing data from Hemnet.se with high coverage and c
 - **Rich listing attributes** — Capture price, area, rooms, coordinates, agency details, and listing labels.
 - **Flexible search control** — Start from a plain `/till-salu` URL or a pre-filtered Hemnet search URL.
 - **Pagination support** — Continue through result pages until your target count is reached.
+- **Built-in request recovery** — Retries with refreshed session cookies when Hemnet temporarily serves a challenge page instead of listing data.
 - **Clean structured dataset** — Receive normalized output ready for analysis and automation.
 
 ---
@@ -207,6 +208,9 @@ Yes. Use a Hemnet URL that already includes filters and sorting options.
 
 ### What if some fields are missing?
 Some listings naturally omit optional information. Missing values are returned as `null` or empty arrays where applicable.
+
+### What happens if Hemnet returns a challenge page?
+The actor retries with a refreshed session and request profile before failing. For heavier runs, enabling Apify residential proxy can improve consistency further.
 
 ### Does it support pagination?
 Yes. The actor paginates through result pages until `results_wanted` or `max_pages` is reached.

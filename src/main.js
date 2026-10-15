@@ -3,7 +3,7 @@ import { join } from 'node:path';
 
 import { Actor, log } from 'apify';
 import { Dataset } from 'crawlee';
-import { gotScraping } from 'got-scraping';
+import { Impit } from 'impit';
 import { CookieJar } from 'tough-cookie';
 
 const GRAPHQL_URL = 'https://www.hemnet.se/graphql';
@@ -11,6 +11,15 @@ const DEFAULT_START_URL = 'https://www.hemnet.se/till-salu';
 const PAGE_SIZE = 50;
 const API_DISCOVERY_PATH = join(process.cwd(), 'API_DISCOVERY.md');
 const HTML_SNIPPET_LIMIT = 240;
+
+const REQUEST_TIMEOUT_MS = 30000;
+const MAX_REQUEST_ATTEMPTS = 6;
+const MAX_BACKOFF_MS = 8000;
+
+// Browser profiles verified against the live Hemnet endpoint. Requests are
+// retried through this list so a temporarily blocked fingerprint auto-heals on
+// the next attempt.
+const BROWSER_PROFILES = ['chrome151', 'firefox144', 'okhttp5', 'chrome142'];
 
 const SEARCH_QUERY = `
 query webSearchForSaleListings($searchParams: ListingSearchForSaleInput!, $sort: ListingSearchForSaleSorting, $offset: Int) {
@@ -77,37 +86,6 @@ const ALLOWED_SORTS = new Set([
     'HIGHEST_FEE',
     'CLOSEST_TO_WATER',
 ]);
-
-const GRAPHQL_HEADER_PROFILES = [
-    (selectedStartUrl) => ({
-        Accept: 'application/json, text/plain, */*',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Content-Type': 'application/json',
-        Origin: 'https://www.hemnet.se',
-        Referer: selectedStartUrl,
-        'Sec-Fetch-Dest': 'empty',
-        'Sec-Fetch-Mode': 'cors',
-        'Sec-Fetch-Site': 'same-origin',
-    }),
-    (selectedStartUrl) => ({
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-        Origin: 'https://www.hemnet.se',
-        Referer: selectedStartUrl,
-    }),
-];
-
-const START_PAGE_HEADERS = {
-    Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-    'Accept-Language': 'en-US,en;q=0.9',
-    'Cache-Control': 'no-cache',
-    Pragma: 'no-cache',
-    'Sec-Fetch-Dest': 'document',
-    'Sec-Fetch-Mode': 'navigate',
-    'Sec-Fetch-Site': 'none',
-    'Sec-Fetch-User': '?1',
-    'Upgrade-Insecure-Requests': '1',
-};
 
 const toInt = (value) => {
     const parsed = Number.parseInt(String(value), 10);
@@ -232,23 +210,67 @@ const normalizeSort = (sort) => {
 
 const truncateText = (value, limit = HTML_SNIPPET_LIMIT) => String(value || '').replace(/\s+/g, ' ').trim().slice(0, limit);
 
-const getContentType = (headers = {}) => String(headers['content-type'] || headers['Content-Type'] || '').toLowerCase();
-
-const looksLikeHtml = (body, headers = {}) => {
-    const contentType = getContentType(headers);
-    const snippet = truncateText(body, 64).toLowerCase();
-    return contentType.includes('text/html')
-        || snippet.startsWith('<!doctype html')
-        || snippet.startsWith('<html')
-        || snippet.includes('just a moment');
+const getHeader = (headers, name) => {
+    if (!headers) return '';
+    if (typeof headers.get === 'function') return String(headers.get(name) || '');
+    return String(headers[name] || headers[name.toLowerCase()] || '');
 };
 
-const buildFailureMetadata = ({ name, response, error }) => ({
-    attempt: name,
-    statusCode: response?.statusCode ?? error?.response?.statusCode ?? null,
-    contentType: getContentType(response?.headers || error?.response?.headers),
-    bodySnippet: truncateText(response?.body || error?.response?.body),
-    message: error?.message,
+const getContentType = (headers) => getHeader(headers, 'content-type').toLowerCase();
+
+const looksLikeHtml = (body, headers) => {
+    const contentType = getContentType(headers);
+    const snippet = truncateText(body, 64).toLowerCase();
+    return (
+        contentType.includes('text/html')
+        || snippet.startsWith('<!doctype html')
+        || snippet.startsWith('<html')
+        || snippet.includes('just a moment')
+    );
+};
+
+const sleep = (ms) => new Promise((resolve) => {
+    setTimeout(resolve, ms);
+});
+
+const computeBackoffMs = (attempt) => {
+    const base = Math.min(1000 * 2 ** (attempt - 1), MAX_BACKOFF_MS);
+    return base + Math.floor(Math.random() * 500);
+};
+
+// One Impit client per (browser profile, proxy session). Reusing clients keeps
+// connection pooling intact, while sharing a cookie jar per profile keeps the
+// Cloudflare clearance cookie consistent with the emulated user agent.
+const cookieJars = new Map();
+const clientCache = new Map();
+
+const getClient = ({ browser, proxyUrl }) => {
+    const key = `${browser}|${proxyUrl || 'direct'}`;
+    let client = clientCache.get(key);
+    if (!client) {
+        if (!cookieJars.has(browser)) cookieJars.set(browser, new CookieJar());
+        client = new Impit({
+            browser,
+            cookieJar: cookieJars.get(browser),
+            timeout: REQUEST_TIMEOUT_MS,
+            ...(proxyUrl ? { proxyUrl } : {}),
+        });
+        clientCache.set(key, client);
+    }
+    return client;
+};
+
+const buildGraphqlHeaders = (selectedStartUrl) => ({
+    Accept: 'application/json, text/plain, */*',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Content-Type': 'application/json',
+    Origin: 'https://www.hemnet.se',
+    Referer: selectedStartUrl,
+});
+
+const buildStartPageHeaders = () => ({
+    Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.9',
 });
 
 let cachedApiDiscovery;
@@ -265,47 +287,34 @@ const readApiDiscovery = async () => {
     return cachedApiDiscovery;
 };
 
-const bootstrapSession = async ({ cookieJar, proxyUrl, selectedStartUrl }) => {
-    const response = await gotScraping.get(selectedStartUrl, {
-        cookieJar,
-        proxyUrl,
-        headers: START_PAGE_HEADERS,
-        throwHttpErrors: false,
-        timeout: { request: 30000 },
-        retry: { limit: 1 },
-    });
+const bootstrapSession = async ({ client, selectedStartUrl }) => {
+    const response = await client.fetch(selectedStartUrl, { headers: buildStartPageHeaders() });
+    const body = await response.text();
 
     return {
-        statusCode: response.statusCode,
+        statusCode: response.status,
         contentType: getContentType(response.headers),
-        bodySnippet: truncateText(response.body),
-        isHtml: looksLikeHtml(response.body, response.headers),
+        bodySnippet: truncateText(body),
+        isHtml: looksLikeHtml(body, response.headers),
     };
 };
 
-const parseJsonResponse = ({ response, name }) => {
-    if (looksLikeHtml(response.body, response.headers)) {
-        throw new Error(`Received HTML instead of JSON on ${name}`);
-    }
+const requestGraphql = async ({ client, requestBody, selectedStartUrl }) => {
+    const response = await client.fetch(GRAPHQL_URL, {
+        method: 'POST',
+        headers: buildGraphqlHeaders(selectedStartUrl),
+        body: JSON.stringify(requestBody),
+    });
+    const body = await response.text();
 
-    if (typeof response.body === 'object' && response.body !== null) {
-        return response.body;
-    }
-
-    try {
-        return JSON.parse(response.body);
-    } catch (error) {
-        throw new Error(`Invalid JSON on ${name}: ${error.message}`);
-    }
+    return {
+        statusCode: response.status,
+        headers: response.headers,
+        body,
+    };
 };
 
-const diagnoseRequestFailure = async ({
-    cookieJar,
-    offset,
-    proxyUrl,
-    requestBody,
-    selectedStartUrl,
-}) => {
+const diagnoseRequestFailure = async ({ proxy, requestBody, selectedStartUrl }) => {
     const apiDiscovery = await readApiDiscovery();
     const diagnostics = [];
 
@@ -314,8 +323,12 @@ const diagnoseRequestFailure = async ({
         snippet: truncateText(apiDiscovery, 320),
     });
 
+    const diagnosticBrowser = BROWSER_PROFILES[0];
+    const diagnosticProxyUrl = proxy ? await proxy.newUrl() : undefined;
+    const diagnosticClient = getClient({ browser: diagnosticBrowser, proxyUrl: diagnosticProxyUrl });
+
     try {
-        const startPage = await bootstrapSession({ cookieJar, proxyUrl, selectedStartUrl });
+        const startPage = await bootstrapSession({ client: diagnosticClient, selectedStartUrl });
         diagnostics.push({
             step: 'start_page_probe',
             ...startPage,
@@ -328,27 +341,16 @@ const diagnoseRequestFailure = async ({
     }
 
     try {
-        const probeResponse = await gotScraping.post(GRAPHQL_URL, {
-            cookieJar,
-            proxyUrl,
-            headers: GRAPHQL_HEADER_PROFILES[1](selectedStartUrl),
-            json: requestBody,
-            throwHttpErrors: false,
-            timeout: { request: 30000 },
-            retry: { limit: 0 },
-        });
-
+        const probe = await requestGraphql({ client: diagnosticClient, requestBody, selectedStartUrl });
         diagnostics.push({
             step: 'graphql_probe',
-            statusCode: probeResponse.statusCode,
-            contentType: getContentType(probeResponse.headers),
-            bodySnippet: truncateText(probeResponse.body),
-            offset,
+            statusCode: probe.statusCode,
+            contentType: getContentType(probe.headers),
+            bodySnippet: truncateText(probe.body),
         });
     } catch (error) {
         diagnostics.push({
             step: 'graphql_probe',
-            offset,
             message: error.message,
         });
     }
@@ -356,63 +358,59 @@ const diagnoseRequestFailure = async ({
     log.warning('Hemnet request diagnostics', { diagnostics });
 };
 
-const fetchGraphqlPayload = async ({
-    cookieJar,
-    offset,
-    proxyUrl,
-    requestBody,
-    selectedStartUrl,
-}) => {
-    const attempts = [
-        { name: 'direct_graphql', profileIndex: 0, bootstrap: false },
-        { name: 'bootstrapped_graphql', profileIndex: 0, bootstrap: true },
-        { name: 'bootstrapped_minimal_graphql', profileIndex: 1, bootstrap: true },
-    ];
-
+const fetchGraphqlPayload = async ({ proxy, requestBody, selectedStartUrl }) => {
     const failures = [];
 
-    for (const attempt of attempts) {
+    for (let attempt = 1; attempt <= MAX_REQUEST_ATTEMPTS; attempt++) {
+        const browser = BROWSER_PROFILES[(attempt - 1) % BROWSER_PROFILES.length];
+        const proxyUrl = proxy ? await proxy.newUrl() : undefined;
+        const client = getClient({ browser, proxyUrl });
+
         try {
-            if (attempt.bootstrap) {
-                const sessionInfo = await bootstrapSession({ cookieJar, proxyUrl, selectedStartUrl });
-                log.info('Bootstrapped Hemnet session', {
-                    attempt: attempt.name,
-                    ...sessionInfo,
+            // The first attempt goes straight to GraphQL. Later attempts refresh
+            // the public search page first to obtain fresh clearance cookies.
+            if (attempt > 1) {
+                const session = await bootstrapSession({ client, selectedStartUrl });
+                log.info('Bootstrapped Hemnet session', { attempt, browser, ...session });
+            }
+
+            const response = await requestGraphql({ client, requestBody, selectedStartUrl });
+
+            if (response.statusCode >= 200 && response.statusCode < 300 && !looksLikeHtml(response.body, response.headers)) {
+                try {
+                    return JSON.parse(response.body);
+                } catch (error) {
+                    failures.push({ attempt, browser, statusCode: response.statusCode, error: `Invalid JSON: ${error.message}` });
+                }
+            } else {
+                failures.push({
+                    attempt,
+                    browser,
+                    statusCode: response.statusCode,
+                    contentType: getContentType(response.headers),
+                    bodySnippet: truncateText(response.body),
                 });
             }
-
-            const response = await gotScraping.post(GRAPHQL_URL, {
-                cookieJar,
-                proxyUrl,
-                headers: GRAPHQL_HEADER_PROFILES[attempt.profileIndex](selectedStartUrl),
-                json: requestBody,
-                throwHttpErrors: false,
-                timeout: { request: 30000 },
-                retry: { limit: 1 },
-            });
-
-            if (response.statusCode >= 400) {
-                failures.push(buildFailureMetadata({ name: attempt.name, response }));
-                log.warning('Hemnet GraphQL attempt failed', failures[failures.length - 1]);
-                continue;
-            }
-
-            return parseJsonResponse({ response, name: attempt.name });
         } catch (error) {
-            failures.push(buildFailureMetadata({ name: attempt.name, error }));
-            log.warning('Hemnet GraphQL attempt failed', failures[failures.length - 1]);
+            failures.push({ attempt, browser, error: error.message });
         }
+
+        const last = failures[failures.length - 1];
+        log.warning('Hemnet GraphQL attempt failed', {
+            attempt,
+            browser,
+            of: MAX_REQUEST_ATTEMPTS,
+            ...last,
+        });
+
+        if (attempt < MAX_REQUEST_ATTEMPTS) await sleep(computeBackoffMs(attempt));
     }
 
-    await diagnoseRequestFailure({
-        cookieJar,
-        offset,
-        proxyUrl,
-        requestBody,
-        selectedStartUrl,
-    });
+    await diagnoseRequestFailure({ proxy, requestBody, selectedStartUrl });
 
-    throw new Error(`Hemnet API request failed after ${attempts.length} attempts. Last failure: ${JSON.stringify(failures.at(-1) || {})}`);
+    throw new Error(
+        `Hemnet API request failed after ${MAX_REQUEST_ATTEMPTS} attempts. Last failure: ${JSON.stringify(failures.at(-1) || {})}`,
+    );
 };
 
 const mapCard = (card) => {
@@ -472,12 +470,8 @@ async function main() {
         proxyConfiguration,
     } = input;
 
-    const resultsWanted = Number.isFinite(Number(resultsWantedRaw))
-        ? Math.max(1, Number(resultsWantedRaw))
-        : 20;
-    const maxPages = Number.isFinite(Number(maxPagesRaw))
-        ? Math.max(1, Number(maxPagesRaw))
-        : 10;
+    const resultsWanted = Number.isFinite(Number(resultsWantedRaw)) ? Math.max(1, Number(resultsWantedRaw)) : 20;
+    const maxPages = Number.isFinite(Number(maxPagesRaw)) ? Math.max(1, Number(maxPagesRaw)) : 10;
 
     const selectedStartUrl = pickFirstUrl(startUrls, startUrl, url);
     const searchParams = parseSearchFromUrl(selectedStartUrl);
@@ -489,7 +483,13 @@ async function main() {
     }
 
     const sortValue = normalizeSort(sort);
-    const proxy = proxyConfiguration ? await Actor.createProxyConfiguration(proxyConfiguration) : undefined;
+
+    const shouldUseProxy = Boolean(
+        proxyConfiguration
+        && (proxyConfiguration.useApifyProxy
+            || (Array.isArray(proxyConfiguration.proxyUrls) && proxyConfiguration.proxyUrls.length > 0)),
+    );
+    const proxy = shouldUseProxy ? await Actor.createProxyConfiguration(proxyConfiguration) : undefined;
 
     log.info('Starting Hemnet API extraction', {
         startUrl: selectedStartUrl,
@@ -501,11 +501,8 @@ async function main() {
     let totalSaved = 0;
     let offset = 0;
     let page = 0;
-    const cookieJar = new CookieJar();
 
     while (totalSaved < resultsWanted && page < maxPages) {
-        const proxyUrl = proxy ? await proxy.newUrl() : undefined;
-
         const body = {
             operationName: 'webSearchForSaleListings',
             query: SEARCH_QUERY,
@@ -516,13 +513,20 @@ async function main() {
             },
         };
 
-        const responseBody = await fetchGraphqlPayload({
-            cookieJar,
-            offset,
-            proxyUrl,
-            requestBody: body,
-            selectedStartUrl,
-        });
+        let responseBody;
+        try {
+            responseBody = await fetchGraphqlPayload({
+                proxy,
+                requestBody: body,
+                selectedStartUrl,
+            });
+        } catch (error) {
+            if (totalSaved === 0) throw error;
+            log.error(`Stopping pagination after a request failure; returning the ${totalSaved} listings already saved.`, {
+                message: error.message,
+            });
+            break;
+        }
 
         const result = responseBody?.data?.searchForSaleListings;
         const errors = responseBody?.errors;

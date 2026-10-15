@@ -9,21 +9,20 @@
       "type": "string",
       "description": "Hemnet for-sale URL, for example https://www.hemnet.se/till-salu",
       "editor": "textfield",
+      "default": "https://www.hemnet.se/till-salu",
       "prefill": "https://www.hemnet.se/till-salu"
     },
     "keyword": {
       "title": "Keyword",
       "type": "string",
-      "description": "Optional keyword filter.",
-      "editor": "textfield",
-      "prefill": ""
+      "description": "Optional keyword filter applied on top of the start URL.",
+      "editor": "textfield"
     },
     "location": {
       "title": "Location",
       "type": "string",
       "description": "Optional location slug fallback when URL has no filters.",
-      "editor": "textfield",
-      "prefill": ""
+      "editor": "textfield"
     },
     "sort": {
       "title": "Sort order",
@@ -31,7 +30,6 @@
       "description": "Sort mode for listings.",
       "editor": "select",
       "default": "NEWEST",
-      "prefill": "NEWEST",
       "enum": [
         "NEWEST",
         "OLDEST",
@@ -57,7 +55,6 @@
       "description": "Maximum listings to save.",
       "minimum": 1,
       "default": 20,
-      "prefill": 20,
       "editor": "number"
     },
     "max_pages": {
@@ -66,16 +63,15 @@
       "description": "Safety cap for paginated API requests.",
       "minimum": 1,
       "default": 10,
-      "prefill": 10,
       "editor": "number"
     },
     "proxyConfiguration": {
       "title": "Proxy configuration",
       "type": "object",
-      "description": "Optional proxy setup for higher request reliability.",
+      "description": "Proxy setup used for requests. Apify Proxy is enabled by default because Hemnet blocks direct datacenter requests.",
       "editor": "proxy",
       "default": {
-        "useApifyProxy": false
+        "useApifyProxy": true
       }
     }
   },
